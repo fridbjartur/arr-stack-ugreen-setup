@@ -1,0 +1,285 @@
+#########################
+# Networks              #
+#########################
+networks:
+  arr-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+#########################
+# Logging               #
+#########################
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+#########################
+# Services              #
+#########################
+services:
+  #############################################
+  # VPN Gateway (Gluetun)                     #
+  #############################################
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: gluetun
+    ports:
+      - 9696:9696 # prowlarr
+      - 7878:7878 # radarr
+      - 8989:8989 # sonarr
+      - 6767:6767 # bazarr
+      - 8080:8080 # qbittorrent webui
+      - 6881:6881 # qbittorrent tcp
+      - 6881:6881/udp # qbittorrent udp
+      - 8191:8191 # flaresolverr
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - .env
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/gluetun/config:/gluetun
+    environment:
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-proton}
+      - VPN_TYPE=${VPN_TYPE:-openvpn}
+      - OPENVPN_USER=${OPENVPN_USER}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
+      - SERVER_COUNTRIES=${VPN_COUNTRIES:-United Kingdom}
+      - TZ=${TZ:-Europe/London}
+    networks:
+      arr-network:
+        ipv4_address: 172.20.0.2   # stable address for anything that must reach services behind gluetun
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  #############################################
+  # Movie Management (Radarr via VPN)        #
+  #############################################
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/radarr/config:/config
+      - ${MEDIA_ROOT:-/volume1/Media}/movies:/movies
+      - ${MEDIA_ROOT:-/volume1/Media}/downloads:/downloads
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7878/"]
+      interval: 2m
+      timeout: 10s
+      retries: 3
+
+  #############################################
+  # TV Show Management (Sonarr via VPN)      #
+  #############################################
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/sonarr/config:/config
+      - ${MEDIA_ROOT:-/volume1/Media}/tv:/tv
+      - ${MEDIA_ROOT:-/volume1/Media}/downloads:/downloads
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989/"]
+      interval: 2m
+      timeout: 10s
+      retries: 3
+
+  #############################################
+  # Indexer Manager (Prowlarr via VPN)       #
+  #############################################
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/prowlarr/config:/config
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9696/"]
+      interval: 2m
+      timeout: 10s
+      retries: 3
+
+  #############################################
+  # Subtitle Management (Bazarr via VPN)     #
+  #############################################
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/bazarr/config:/config
+      - ${MEDIA_ROOT:-/volume1/Media}/movies:/movies
+      - ${MEDIA_ROOT:-/volume1/Media}/tv:/tv
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6767/"]
+      interval: 2m
+      timeout: 10s
+      retries: 3
+
+  #############################################
+  # Download Client (qBittorrent via VPN)    #
+  #############################################
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=6881
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/qbittorrent/config:/config
+      - ${MEDIA_ROOT:-/volume1/Media}/downloads:/downloads
+      - ${MEDIA_ROOT:-/volume1/Media}:/media
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+
+  #############################################
+  # Media Server (Jellyfin)                  #
+  #############################################
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-10}
+      - TZ=${TZ:-Europe/London}
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/jellyfin/config:/config
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/jellyfin/cache:/cache
+      - ${MEDIA_ROOT:-/volume1/Media}/movies:/media/movies:ro
+      - ${MEDIA_ROOT:-/volume1/Media}/tv:/media/tv:ro
+    ports:
+      - 8096:8096
+      - 8920:8920 # optional
+      - 7359:7359/udp # optional
+      # - 1900:1900/udp # optional
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 1m
+      timeout: 30s
+      retries: 2
+      start_period: 30s
+
+  #############################################
+  # Request Manager (Jellyseerr)             #
+  #############################################
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - TZ=${TZ:-Europe/London}
+      - PORT=5055
+    networks:
+      arr-network:
+    ports:
+      - 5055:5055
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    volumes:
+      - ${APP_ROOT:-/volume2/docker/arr-stack}/jellyseerr/config:/app/config
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:5055/api/v1/status"]
+      interval: 2m
+      timeout: 10s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FLARESOLVERR - Cloudflare bypass. Helps Prowlarr access protected sites.
+  # Use in Prowlarr as: http://gluetun:8191
+  # ═══════════════════════════════════════════════════════════════════════════
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TZ:-Europe/London}
+    labels:
+      - deunhealth.restart.on.unhealthy=true
+    restart: always
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8191/v1"]
+      interval: 5m
+      timeout: 20s
+      retries: 3
+      start_period: 1m

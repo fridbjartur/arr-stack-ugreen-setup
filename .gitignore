@@ -1,0 +1,13 @@
+# Local secrets
+.env
+
+# macOS metadata
+.DS_Store
+
+# Keep only top-level service folders and their config folders.
+/*/*
+!/*/.gitkeep
+!/*/config/
+
+/*/config/**
+!/*/config/.gitkeep
